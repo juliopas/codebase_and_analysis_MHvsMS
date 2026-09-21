@@ -8,9 +8,8 @@ Simulation code, analysis code and simulation data accompanying the manuscript
 This repository contains everything needed to re-run the simulations, re-run the
 analysis, and regenerate the figures of the manuscript.
 
-<!-- TODO before submission: fill in -->
-- **Authors:** _to be filled in_
-- **Preprint / DOI:** _to be filled in_
+- **Authors:** Júlio P. A. Santos
+- **DOI:**  to be filled in.
 - **Contact:** julio.palma.de.assuncao.santos@univie.ac.at
 
 ---
@@ -21,8 +20,7 @@ The code lives here; the **dataset is distributed separately** because it is
 2.0 GB, which exceeds what GitHub is meant to hold (and two files exceed
 GitHub's 100 MB per-file limit).
 
-<!-- TODO before submission: replace with the real DOI once the deposit is published -->
-> **Dataset:** _Zenodo DOI to be filled in_
+> **Dataset:** 10.5281/zenodo.22872568
 
 To use it, download and unpack the archive so that its `DATA/` directory sits at
 the root of this repository:
@@ -58,6 +56,7 @@ machine, user or working directory.
 | `SCRIPTS/pyanal/` | Supporting library: energies, ITIM surface extraction, bond-to-particle conversion, height maps |
 | `SCRIPTS/repo_paths.py` | Repository-relative path resolution |
 | `requirements.txt` | Analysis dependencies |
+| `LICENSE` | GPL-3.0-or-later, the licence for all code here |
 | `SCRIPTS/data_check.ipynb` | Integrity sweep over the simulation data; its saved output records the damaged files listed below |
 | `SCRIPTS/rms.ipynb` | Surface RMS roughness against the Langevin parameter |
 | `SCRIPTS/pressomancy_h5_tool.ipynb` | Converts simulation checkpoints to VTK for visualisation |
@@ -245,16 +244,19 @@ reproduces this check over the whole dataset.
 
 ## Licence
 
-`espresso/` is ESPResSo, distributed under the GNU General Public License v3 or
-later, and modifications to it inherit that licence. `pressomancy/` carries its
-own licence (see `pressomancy/LICENSE`).
+**Code in this repository: GNU General Public License v3.0 or later
+(GPL-3.0-or-later).** The full text is in [LICENSE](LICENSE).
 
-<!-- TODO before submission: choose and add a LICENSE file for the analysis code,
-     and a licence for the dataset deposit (CC-BY-4.0 is the usual choice). -->
+In short: you are free to use, modify and redistribute this code, including for
+commercial purposes, provided you keep it under the GPL and pass on the source.
+
+**Data: Creative Commons Attribution 4.0 International (CC BY 4.0).** The dataset
+is a separate deposit (see [Data availability](#data-availability)) and is not
+covered by the GPL — it is measurement output, not a derived work of the code.
+CC BY 4.0 lets anyone reuse it with attribution, which is what most journals and
+funders now expect of a data-availability statement.
 
 ## Citing
 
-If you use this code or data, please cite the manuscript, and cite ESPResSo
-separately as requested in `espresso/CITATION.cff`.
-
-<!-- TODO before submission: add the BibTeX entry for the paper and the dataset DOI. -->
+If you use this code or data, please cite the manuscript, and cite ESPResSo and
+Pressomancy separately — for ESPResSo as requested in `espresso/CITATION.cff`.
