@@ -1,0 +1,112 @@
+/*
+ * Copyright (C) 2022-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "config/config.hpp"
+
+#ifdef ESPRESSO_DIPOLES
+
+#include "Actor.hpp"
+
+#include "DipolarDirectSum.hpp"
+#include "DipolarP3M.hpp"
+
+#include "core/magnetostatics/dlc.hpp"
+
+#include "script_interface/get_value.hpp"
+
+#include <memory>
+#include <string>
+#include <variant>
+
+namespace ScriptInterface {
+namespace Dipoles {
+
+class DipolarLayerCorrection
+    : public Actor<DipolarLayerCorrection, ::DipolarLayerCorrection> {
+  using DipolarDSR = DipolarDirectSum;
+  using BaseSolver = std::variant<
+#ifdef ESPRESSO_DP3M
+      std::shared_ptr<DipolarP3M<Arch::CPU>>,
+#endif
+      std::shared_ptr<DipolarDSR>>;
+  BaseSolver m_solver;
+
+  void on_bind_system(::System::System &) override {
+    std::visit([this](auto &solver) { solver->bind_system(m_system.lock()); },
+               m_solver);
+  }
+
+public:
+  DipolarLayerCorrection() {
+    add_parameters({
+        {"maxPWerror", AutoParameter::read_only,
+         [this]() { return actor()->dlc.maxPWerror; }},
+        {"gap_size", AutoParameter::read_only,
+         [this]() { return actor()->dlc.gap_size; }},
+        {"far_cut", AutoParameter::read_only,
+         [this]() { return actor()->dlc.far_cut; }},
+        {"actor", AutoParameter::read_only,
+         [this]() {
+           return std::visit([](auto &solver) { return Variant{solver}; },
+                             m_solver);
+         }},
+    });
+  }
+
+  void do_construct(VariantMap const &params) override {
+    ::DipolarLayerCorrection::BaseSolver solver;
+    auto so_ptr = get_value<ObjectRef>(params, "actor");
+    context()->parallel_try_catch([&]() {
+#ifdef ESPRESSO_DP3M
+      if (auto so = std::dynamic_pointer_cast<DipolarP3M<Arch::CPU>>(so_ptr)) {
+        solver = so->actor();
+        m_solver = so;
+        return;
+      }
+#endif // ESPRESSO_DP3M
+      if (auto so = std::dynamic_pointer_cast<DipolarDSR>(so_ptr)) {
+        if (so->actor()->is_gpu()) {
+          throw std::invalid_argument("Parameter 'actor' of type " +
+                                      std::string{so_ptr->name()} +
+                                      " on GPU isn't supported by DLC");
+        }
+        solver = so->actor();
+        m_solver = so;
+        return;
+      }
+      throw std::invalid_argument("Parameter 'actor' of type " +
+                                  std::string{so_ptr->name()} +
+                                  " isn't supported by DLC");
+    });
+    context()->parallel_try_catch([&]() {
+      auto dlc = dlc_data(get_value<double>(params, "maxPWerror"),
+                          get_value<double>(params, "gap_size"),
+                          get_value<double>(params, "far_cut"));
+      m_actor =
+          std::make_shared<CoreActorClass>(std::move(dlc), std::move(solver));
+    });
+  }
+};
+
+} // namespace Dipoles
+} // namespace ScriptInterface
+
+#endif // ESPRESSO_DIPOLES

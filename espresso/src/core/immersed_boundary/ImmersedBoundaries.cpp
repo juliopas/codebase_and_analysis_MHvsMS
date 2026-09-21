@@ -1,0 +1,221 @@
+/*
+ * Copyright (C) 2010-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "ImmersedBoundaries.hpp"
+
+#include "BoxGeometry.hpp"
+#include "Particle.hpp"
+#include "cell_system/CellStructure.hpp"
+#include "communication.hpp"
+#include "ibm_volcons.hpp"
+#include "system/System.hpp"
+
+#include "bonded_interactions/bonded_interaction_data.hpp"
+
+#include <boost/mpi/collectives/all_reduce.hpp>
+#include <boost/range/algorithm/find_if.hpp>
+
+#include <algorithm>
+#include <functional>
+#include <ranges>
+#include <span>
+#include <variant>
+#include <vector>
+
+/** Calculate volumes, volume force and add it to each virtual particle. */
+void ImmersedBoundaries::volume_conservation(CellStructure &cs) {
+  if (VolumeInitDone && !BoundariesFound) {
+    return;
+  }
+  calc_volumes(cs);
+  calc_volume_force(cs);
+}
+
+/** Initialize volume conservation */
+void ImmersedBoundaries::init_volume_conservation(CellStructure &cs) {
+  auto const &bonded_ias = *get_system().bonded_ias;
+  // Check since this function is called at the start of every integrate loop
+  // Also check if volume has been set due to reading of a checkpoint
+  if (not BoundariesFound) {
+    BoundariesFound = std::ranges::any_of(
+        std::views::elements<1>(bonded_ias), [](auto const &handle) {
+          return std::holds_alternative<IBMVolCons>(*handle);
+        });
+  }
+
+  if (!VolumeInitDone && BoundariesFound) {
+    // Calculate volumes
+    calc_volumes(cs);
+
+    // Loop through all bonded interactions and check if we need to set the
+    // reference volume
+    for (auto &handle : std::views::elements<1>(bonded_ias)) {
+      if (auto *v = std::get_if<IBMVolCons>(handle.get())) {
+        // This check is important because InitVolumeConservation may be called
+        // accidentally during the integration. Then we must not reset the
+        // reference
+        BoundariesFound = true;
+        if (v->volRef == 0.) {
+          v->volRef = VolumesCurrent[v->softID];
+        }
+      }
+    }
+
+    VolumeInitDone = true;
+  }
+}
+
+static IBMVolCons const *
+vol_cons_parameters(BondedInteractionsMap const &bonded_ias,
+                    Particle const &p1) {
+  auto const it = boost::find_if(p1.bonds(), [&](auto const &bond) -> bool {
+    return std::holds_alternative<IBMVolCons>(*bonded_ias.at(bond.bond_id()));
+  });
+
+  return (it != p1.bonds().end())
+             ? std::get_if<IBMVolCons>(bonded_ias.at(it->bond_id()).get())
+             : nullptr;
+}
+
+/** Calculate partial volumes on all compute nodes and call MPI to sum up.
+ *  See @cite zhang01b, @cite dupin08a, @cite kruger12a.
+ */
+void ImmersedBoundaries::calc_volumes(CellStructure &cs) {
+
+  if (!BoundariesFound)
+    return;
+
+  auto const &box_geo = *get_system().box_geo;
+  auto const &bonded_ias = *get_system().bonded_ias;
+
+  // Partial volumes for each soft particle, to be summed up
+  std::vector<double> tempVol(VolumesCurrent.size());
+
+  // Loop over all particles on local node
+  cs.bond_loop([&tempVol, &box_geo, &bonded_ias](
+                   Particle &p1, int bond_id, std::span<Particle *> partners) {
+    auto const vol_cons_params = vol_cons_parameters(bonded_ias, p1);
+
+    if (vol_cons_params &&
+        std::holds_alternative<IBMTriel>(*bonded_ias.at(bond_id).get())) {
+      // Our particle is the leading particle of a triel
+      // Get second and third particle of the triangle
+      Particle &p2 = *partners[0];
+      Particle &p3 = *partners[1];
+
+      // Unfold position of first node.
+      // This is to get a continuous trajectory with no jumps when box
+      // boundaries are crossed.
+      auto const x1 = box_geo.unfolded_position(p1.pos(), p1.image_box());
+      auto const x2 = x1 + box_geo.get_mi_vector(p2.pos(), x1);
+      auto const x3 = x1 + box_geo.get_mi_vector(p3.pos(), x1);
+
+      // Volume of this tetrahedron
+      // See @cite zhang01b
+      // The volume can be negative, but it is not necessarily the
+      // "signed volume" in the above paper (the sign of the real
+      // "signed volume" must be calculated using the normal vector; the
+      // result of the calculation here is simply a term in the sum
+      // required to calculate the volume of a particle). Again, see the
+      // paper. This should be equivalent to the formulation using
+      // vector identities in @cite kruger12a
+
+      const double v321 = x3[0] * x2[1] * x1[2];
+      const double v231 = x2[0] * x3[1] * x1[2];
+      const double v312 = x3[0] * x1[1] * x2[2];
+      const double v132 = x1[0] * x3[1] * x2[2];
+      const double v213 = x2[0] * x1[1] * x3[2];
+      const double v123 = x1[0] * x2[1] * x3[2];
+
+      tempVol[vol_cons_params->softID] +=
+          1.0 / 6.0 * (-v321 + v231 + v312 - v132 - v213 + v123);
+    }
+    return false;
+  });
+
+  // Sum up and communicate
+  boost::mpi::all_reduce(comm_cart, tempVol.data(),
+                         static_cast<int>(tempVol.size()),
+                         VolumesCurrent.data(), std::plus<double>());
+}
+
+/** Calculate and add the volume force to each node */
+void ImmersedBoundaries::calc_volume_force(CellStructure &cs) {
+  if (!BoundariesFound)
+    return;
+
+  auto const &box_geo = *get_system().box_geo;
+  auto const &bonded_ias = *get_system().bonded_ias;
+
+  cs.bond_loop([this, &box_geo, &bonded_ias](Particle &p1, int bond_id,
+                                             std::span<Particle *> partners) {
+    if (std::holds_alternative<IBMTriel>(*bonded_ias.at(bond_id).get())) {
+      // Check if particle has an IBM Triel bonded interaction and an
+      // IBM VolCons bonded interaction. Basically this loops over all
+      // triangles, not all particles. First round to check for volume
+      // conservation.
+      auto const vol_cons_params = vol_cons_parameters(bonded_ias, p1);
+      if (not vol_cons_params)
+        return false;
+
+      auto const current_volume =
+          VolumesCurrent[static_cast<unsigned int>(vol_cons_params->softID)];
+
+      // Our particle is the leading particle of a triel
+      // Get second and third particle of the triangle
+      Particle &p2 = *partners[0];
+      Particle &p3 = *partners[1];
+
+      // Unfold position of first node.
+      // This is to get a continuous trajectory with no jumps when box
+      // boundaries are crossed.
+      auto const x1 = box_geo.unfolded_position(p1.pos(), p1.image_box());
+
+      // Unfolding seems to work only for the first particle of a triel
+      // so get the others from relative vectors considering PBC
+      auto const a12 = box_geo.get_mi_vector(p2.pos(), x1);
+      auto const a13 = box_geo.get_mi_vector(p3.pos(), x1);
+
+      // Now we have the true and good coordinates
+      // This is eq. (9) in @cite dupin08a.
+      auto const n = vector_product(a12, a13);
+      const double ln = n.norm();
+      const double A = 0.5 * ln;
+      const double fact = vol_cons_params->kappaV *
+                          (current_volume - vol_cons_params->volRef) /
+                          current_volume;
+
+      auto const nHat = n / ln;
+      auto const force = -fact * A * nHat;
+
+      p1.force() += force;
+      p2.force() += force;
+      p3.force() += force;
+    }
+    return false;
+  });
+}
+
+void ImmersedBoundaries::register_softID(IBMVolCons &bond) {
+  auto const new_size = bond.softID + 1u;
+  if (new_size > VolumesCurrent.size()) {
+    VolumesCurrent.resize(new_size);
+  }
+  bond.set_volumes_view(VolumesCurrent);
+}

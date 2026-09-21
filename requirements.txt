@@ -1,0 +1,27 @@
+# Dependencies for the ANALYSIS, which regenerates every figure in the manuscript.
+#
+#     pip install -r requirements.txt
+#     pip install ./pressomancy ./SCRIPTS/pyanal
+#
+# ESPResSo is NOT needed for this. It is required only to re-run the simulations
+# themselves, in which case the code is launched through its `pypresso` wrapper
+# rather than through a plain interpreter. See README.md.
+#
+# Left unpinned so the install works across platforms and Python versions. The
+# combination below was installed and verified on macOS 15 (arm64) with
+# Python 3.13: numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2, h5py 3.16.0,
+# numba 0.67.0, tqdm 4.70.1, igraph 1.0.0, colorcet 3.2.1, gwyfile 0.3.0,
+# pywigxjpf 1.13.3.
+
+numpy
+scipy
+matplotlib
+h5py
+numba
+tqdm
+igraph
+colorcet
+
+# Optional -- imported lazily, only when the corresponding feature is used.
+gwyfile      # exporting surface height maps (mae_analysis save_HEIGHT_MAPS)
+pywigxjpf    # Wigner-3j symbols for the bond-orientational order parameters

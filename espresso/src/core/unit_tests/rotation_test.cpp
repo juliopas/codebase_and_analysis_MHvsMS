@@ -1,0 +1,315 @@
+/*
+ * Copyright (C) 2022-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#define BOOST_TEST_MODULE "Particle rotation test"
+#define BOOST_TEST_DYN_LINK
+
+#include <config/config.hpp>
+
+#ifdef ESPRESSO_ROTATION
+
+#include <boost/test/unit_test.hpp>
+
+#include "Particle.hpp"
+#include "rotation.hpp"
+
+#include <utils/Vector.hpp>
+#include <utils/quaternion.hpp>
+
+#include <initializer_list>
+#include <limits>
+#include <numbers>
+#include <stdexcept>
+#include <tuple>
+
+auto constexpr tol = 5. * 100. * std::numeric_limits<double>::epsilon();
+
+namespace Testing {
+std::tuple<Utils::Quaternion<double>, Utils::Vector3d>
+setup_trivial_quat(unsigned int i, Utils::Vector3d const &v_in) {
+  auto quat = Utils::Quaternion<double>{{0., 0., 0., 0.}};
+  quat[i] = 1.;
+  auto v_ref = v_in;
+  if (i >= 1) {
+    v_ref *= -1.;
+    v_ref[static_cast<unsigned int>(i - 1)] *= -1.;
+  }
+  return std::make_tuple(quat, v_ref);
+}
+} // namespace Testing
+
+BOOST_AUTO_TEST_CASE(convert_vector_space_to_body_test) {
+  auto const t_in = Utils::Vector3d{{1., 2., 3.}};
+  for (unsigned int i : {0u, 1u, 2u, 3u}) {
+    auto p = Particle();
+    Utils::Vector3d t_ref;
+    std::tie(p.quat(), t_ref) = Testing::setup_trivial_quat(i, t_in);
+    auto const t_out = convert_vector_space_to_body(p, t_in);
+    for (unsigned int j : {0u, 1u, 2u}) {
+      BOOST_CHECK_CLOSE(t_out[j], t_ref[j], tol);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(convert_torque_to_body_frame_apply_fix_test) {
+  auto const t_in = Utils::Vector3d{{1., 2., 3.}};
+  {
+    // test particle torque conversion
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      auto p = Particle();
+      p.set_can_rotate_all_axes();
+      Utils::Vector3d t_ref;
+      std::tie(p.quat(), t_ref) = Testing::setup_trivial_quat(i, t_in);
+      p.torque() = t_in;
+      convert_torque_to_body_frame_apply_fix(p);
+      auto const t_out = p.torque();
+      for (unsigned int j : {0u, 1u, 2u}) {
+        BOOST_CHECK_CLOSE(t_out[j], t_ref[j], tol);
+      }
+    }
+  }
+  {
+    // torque is set to zero for axes without rotation
+    for (unsigned int j : {0u, 1u, 2u}) {
+      auto p = Particle();
+      p.set_can_rotate_all_axes();
+      p.set_can_rotate_around(j, false);
+      p.quat() = Utils::Quaternion<double>::identity();
+      p.torque() = t_in;
+      auto t_ref = t_in;
+      t_ref[j] = 0.;
+      convert_torque_to_body_frame_apply_fix(p);
+      BOOST_TEST(p.torque() == t_ref, boost::test_tools::per_element());
+    }
+  }
+  {
+    // torque is always zero for non-rotatable particles
+    auto p = Particle();
+    p.set_cannot_rotate_all_axes();
+    p.quat() = Utils::Quaternion<double>::identity();
+    p.torque() = t_in;
+    convert_torque_to_body_frame_apply_fix(p);
+    auto const t_ref = Utils::Vector3d{};
+    BOOST_TEST(p.torque() == t_ref, boost::test_tools::per_element());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(rotate_particle_body_test) {
+  auto p = Particle();
+  p.quat() = {1., 2., 3., 4.};
+  {
+    // fixed particles are unaffected, quaternion is identical to original
+    p.set_cannot_rotate_all_axes();
+    auto const phi = 2.;
+    auto const quat = local_rotate_particle_body(p, {0., 0., 1.}, phi);
+    BOOST_TEST((quat == p.quat()));
+  }
+  {
+    // edge case: null rotation throws an exception
+    p.set_can_rotate_around(2, true);
+    auto const phi = 2.;
+    BOOST_CHECK_THROW(local_rotate_particle_body(p, {1., 1., 0.}, phi),
+                      std::exception);
+  }
+  {
+    // an angle of zero has no effect, quaternion is identical to original
+    p.set_can_rotate_all_axes();
+    auto const phi = 0.;
+    auto const quat = local_rotate_particle_body(p, {1., 2., 3.}, phi);
+    BOOST_TEST((quat == p.quat()));
+  }
+  {
+    // an angle of pi around the z-axis flips the quaternion sequence
+    p.set_can_rotate_all_axes();
+    auto const phi = std::numbers::pi;
+    auto const quat = local_rotate_particle_body(p, {0., 0., 1.}, phi);
+    auto const quat_ref = Utils::Vector4d{{-4., 3., -2., 1.}};
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+    }
+  }
+  {
+    // an angle of 2 pi around the z-axis flips the quaternion sign
+    p.set_can_rotate_all_axes();
+    auto const phi = 2. * std::numbers::pi;
+    auto const quat = local_rotate_particle_body(p, {0., 0., 1.}, phi);
+    auto const quat_ref = Utils::Vector4d{{-1., -2., -3., -4.}};
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(propagate_omega_quat_particle_test) {
+  auto p = Particle();
+  p.set_can_rotate_all_axes();
+  {
+    // test edge case: null quaternion and no rotation
+    p.quat() = {0., 0., 0., 0.};
+    p.omega() = {0., 0., 0.};
+    propagate_omega_quat_particle(p, 0.01);
+    auto const quat = p.quat();
+    auto const quat_ref = Utils::Quaternion<double>::identity();
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+    }
+  }
+  {
+    // test trivial cases with parameters extremely close to the limit:
+    // time step almost 1.0 and product of time step with omega almost 2.0
+    auto const time_step = 0.99;
+    for (unsigned int j : {0u, 1u, 2u}) {
+      p.quat() = Utils::Quaternion<double>::identity();
+      p.omega() = {0., 0., 0.};
+      p.omega()[j] = 2.;
+      propagate_omega_quat_particle(p, time_step);
+      auto const quat = p.quat();
+      auto quat_ref = Utils::Quaternion<double>::identity();
+      quat_ref[1 + j] = time_step;
+      quat_ref[0] = std::sqrt(1. - time_step * time_step);
+      for (unsigned int i : {0u, 1u, 2u, 3u}) {
+        BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+      }
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(convert_operator_body_to_space_test) {
+  auto constexpr sqrt_2_half = std::numbers::sqrt2 / 2.0;
+  // rotation around y-axis by pi/2
+  Utils::Quaternion<double> const quat = {sqrt_2_half, 0.0, sqrt_2_half, 0.0};
+  // rotation around z-axis by pi/4
+  Utils::Matrix<double, 3, 3> const linear_transf_body = {
+      {sqrt_2_half, -sqrt_2_half, 0.0},
+      {sqrt_2_half, sqrt_2_half, 0.0},
+      {0.0, 0.0, 1.0}};
+  // rotation around x-axis by pi/4
+  Utils::Matrix<double, 3, 3> const linear_transf_space_ref = {
+      {1.0, 0.0, 0.0},
+      {0.0, sqrt_2_half, -sqrt_2_half},
+      {0.0, sqrt_2_half, sqrt_2_half}};
+
+  auto const linear_transf_space =
+      convert_body_to_space(quat, linear_transf_body);
+
+  for (unsigned int i = 0; i < 3; i++) {
+    for (unsigned int j = 0; j < 3; j++) {
+      if (linear_transf_space_ref(i, j) == 0.0) {
+        BOOST_CHECK_SMALL(
+            std::abs(linear_transf_space(i, j) - linear_transf_space_ref(i, j)),
+            tol);
+      } else {
+        BOOST_CHECK_CLOSE(linear_transf_space(i, j),
+                          linear_transf_space_ref(i, j), tol);
+      }
+    }
+  }
+}
+
+#ifdef ESPRESSO_DIPOLES
+BOOST_AUTO_TEST_CASE(convert_dip_to_quat_test) {
+  auto const quat_to_vector4d = [](Utils::Quaternion<double> const &quat) {
+    return Utils::Vector4d{quat.data(), quat.data() + 4};
+  };
+  auto p = Particle();
+  p.quat() = {1., 2., 3., 4.};
+  {
+    auto const dipm = 0.8;
+    auto const pair = convert_dip_to_quat({0., 0., dipm});
+    auto const quat = quat_to_vector4d(pair.first);
+    auto const quat_ref = Utils::Vector4d{{1., 0., 0., 0.}};
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+    }
+    BOOST_CHECK_CLOSE(pair.second, dipm, tol);
+  }
+  {
+    auto const dipm = 1.6;
+    auto const pair = convert_dip_to_quat({dipm, 0., 0.});
+    auto const quat = quat_to_vector4d(pair.first);
+    auto const quat_ref = Utils::Vector4d{{0.5, -0.5, 0.5, -0.5}};
+    for (unsigned int i : {0u, 1u, 2u, 3u}) {
+      BOOST_CHECK_CLOSE(quat[i], quat_ref[i], tol);
+    }
+    BOOST_CHECK_CLOSE(pair.second, dipm, tol);
+  }
+}
+#endif // ESPRESSO_DIPOLES
+
+#ifdef ESPRESSO_THERMAL_STONER_WOHLFARTH
+// prototype of the function to test
+void stoner_wohlfarth_no_field(Particle &p, Utils::Vector3d const &e_k,
+                               double kT, double noise);
+
+static void prepare_tsw_flip(Particle &p, double phi0) {
+  p.dipm() = 0.5;
+  p.quat() = {1., 2., 3., 4.};
+  p.stoner_wohlfarth_phi_0() = phi0;
+}
+
+static void check_tsw_flip(auto const &p, auto const &quat, double dipm) {
+  for (unsigned int i : {0u, 1u, 2u, 3u}) {
+    BOOST_CHECK_CLOSE(p.quat()[i], quat[i], tol);
+  }
+  BOOST_CHECK_CLOSE(p.dipm(), dipm, tol);
+}
+
+BOOST_AUTO_TEST_CASE(stoner_wohlfarth_no_field_test) {
+  using Utils::convert_director_to_quaternion;
+  auto const kT = 1.;
+  auto const sat_mag = 0.65;
+  auto const e_k = Utils::Vector3d{{1., 2., 3.}};
+  auto const quat_ref_up = convert_director_to_quaternion(sat_mag * e_k);
+  auto const quat_ref_down = convert_director_to_quaternion(-sat_mag * e_k);
+  auto const dipm_ref = (sat_mag * e_k).norm();
+  auto p = Particle();
+  p.magnetic_anisotropy_energy() = 1.;
+  p.stoner_wohlfarth_tau0_inv() = 1.;
+  p.stoner_wohlfarth_dt_incr() = 1.;
+  p.saturation_magnetization() = sat_mag;
+  for (auto phi0 : {0., 0.01, -0.01}) {
+    {
+      prepare_tsw_flip(p, phi0);
+      stoner_wohlfarth_no_field(p, e_k, kT, 0.);
+      check_tsw_flip(p, quat_ref_down, dipm_ref);
+    }
+    {
+      prepare_tsw_flip(p, phi0);
+      stoner_wohlfarth_no_field(p, e_k, kT, 1.);
+      check_tsw_flip(p, quat_ref_up, dipm_ref);
+    }
+  }
+  for (auto phi0 : {std::numbers::pi_v<double>, 3.1, 3.2}) {
+    {
+      prepare_tsw_flip(p, phi0);
+      stoner_wohlfarth_no_field(p, e_k, kT, 0.);
+      check_tsw_flip(p, quat_ref_up, dipm_ref);
+    }
+    {
+      prepare_tsw_flip(p, phi0);
+      stoner_wohlfarth_no_field(p, e_k, kT, 1.);
+      check_tsw_flip(p, quat_ref_down, dipm_ref);
+    }
+  }
+}
+#endif // ESPRESSO_THERMAL_STONER_WOHLFARTH
+
+#else  // ESPRESSO_ROTATION
+int main(int argc, char **argv) {}
+#endif // ESPRESSO_ROTATION

@@ -1,0 +1,61 @@
+/*
+ * Copyright (C) 2017-2026 The ESPResSo project
+ *   Max-Planck-Institute for Polymer Research, Theory Group
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <numeric>
+#include <vector>
+
+#include <boost/mpi/collectives/gather.hpp>
+#include <boost/mpi/communicator.hpp>
+
+namespace Utils::Mpi::detail {
+
+template <typename T>
+int size_and_offset(std::vector<int> &sizes, std::vector<int> &displ,
+                    int n_elem, const boost::mpi::communicator &comm,
+                    int root = 0) {
+  auto const world_size = static_cast<unsigned int>(comm.size());
+  sizes.resize(world_size);
+  displ.resize(world_size);
+
+  /* Gather sizes */
+  boost::mpi::gather(comm, n_elem, sizes, root);
+
+  auto const total_size = std::accumulate(sizes.begin(), sizes.end(), 0);
+
+  int offset = 0;
+  for (std::size_t i = 0; i < sizes.size(); i++) {
+    displ[i] = offset;
+    offset += sizes[i];
+  }
+
+  return total_size;
+}
+
+inline void size_and_offset(int n_elem, const boost::mpi::communicator &comm,
+                            int root = 0) {
+  /* Send local size */
+  boost::mpi::gather(comm, n_elem, root);
+}
+
+} // namespace Utils::Mpi::detail

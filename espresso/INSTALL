@@ -1,0 +1,34 @@
+******************************************************************************
+*
+*                  ESPResSo installation
+*
+******************************************************************************
+
+The ESPResSo compilation and installation process is decribed in
+detail in the ESPResSo user's guide, which is available online at
+
+	https://espressomd.github.io/doc/index.html
+
+
+QUICK START
+-----------
+Create a build directory and run CMake in it:
+
+> mkdir build
+> cd build
+> cmake ..
+> cmake --build .
+
+When these steps have completed successfully, you can run ESPResSo with:
+
+> ./pypresso
+
+
+LICENSE
+-------
+Copyright (C) 2010-2025 The ESPResSo project
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.  This file is offered as-is,
+without any warranty.

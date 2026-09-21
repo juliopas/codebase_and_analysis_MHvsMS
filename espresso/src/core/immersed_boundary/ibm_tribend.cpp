@@ -1,0 +1,126 @@
+/*
+ * Copyright (C) 2010-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "immersed_boundary/ibm_tribend.hpp"
+
+#include "BoxGeometry.hpp"
+#include "cell_system/CellStructure.hpp"
+#include "ibm_common.hpp"
+
+#include <utils/Vector.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <tuple>
+
+std::tuple<Utils::Vector3d, Utils::Vector3d, Utils::Vector3d, Utils::Vector3d>
+IBMTribend::calc_forces(BoxGeometry const &box_geo, Particle const &p1,
+                        Particle const &p2, Particle const &p3,
+                        Particle const &p4) const {
+
+  // Get vectors making up the two triangles
+  auto const dx1 = box_geo.get_mi_vector(p1.pos(), p3.pos());
+  auto const dx2 = box_geo.get_mi_vector(p2.pos(), p3.pos());
+  auto const dx3 = box_geo.get_mi_vector(p4.pos(), p3.pos());
+
+  // Get normals on triangle; pointing outwards by definition of indices
+  // sequence
+  auto n1 = vector_product(dx1, dx2);
+  auto n2 = vector_product(dx3, dx1);
+
+  // Get 2*area of triangles out of the magnitude of the resulting normals and
+  // make the latter unity
+  auto const Ai = n1.norm();
+  n1 /= Ai;
+
+  auto const Aj = n2.norm();
+  n2 /= Aj;
+
+  // Get the prefactor for the force term
+  auto const sc = std::min(1.0, n1 * n2);
+
+  // Get theta as angle between normals
+  auto const direc = vector_product(n1, n2);
+  auto const desc = (dx1 * direc);
+  auto const theta = std::acos(sc) * std::copysign(1., desc);
+
+  auto const DTh = theta - theta0;
+  auto const Pre = kb * DTh * std::copysign(1., theta);
+
+  auto const v1 = (n2 - sc * n1).normalize();
+  auto const v2 = (n1 - sc * n2).normalize();
+
+  // Force on particles: eq. (C.28-C.31)
+  auto const force1 =
+      Pre *
+      (vector_product(box_geo.get_mi_vector(p2.pos(), p3.pos()), v1) / Ai +
+       vector_product(box_geo.get_mi_vector(p3.pos(), p4.pos()), v2) / Aj);
+  auto const force2 =
+      Pre *
+      (vector_product(box_geo.get_mi_vector(p3.pos(), p1.pos()), v1) / Ai);
+  auto const force3 =
+      Pre *
+      (vector_product(box_geo.get_mi_vector(p1.pos(), p2.pos()), v1) / Ai +
+       vector_product(box_geo.get_mi_vector(p4.pos(), p1.pos()), v2) / Aj);
+  auto const force4 =
+      Pre *
+      (vector_product(box_geo.get_mi_vector(p1.pos(), p3.pos()), v2) / Aj);
+  return std::make_tuple(force1, force2, force3, force4);
+}
+
+void IBMTribend::initialize(BoxGeometry const &box_geo,
+                            CellStructure const &cell_structure) {
+  if (is_initialized) {
+    return;
+  }
+  // Compute theta0
+  if (flat) {
+    theta0 = 0.;
+  } else {
+    // Get particles
+    auto const [ind1, ind2, ind3, ind4] = p_ids;
+    auto const pos1 = get_ibm_particle_position(cell_structure, ind1);
+    auto const pos2 = get_ibm_particle_position(cell_structure, ind2);
+    auto const pos3 = get_ibm_particle_position(cell_structure, ind3);
+    auto const pos4 = get_ibm_particle_position(cell_structure, ind4);
+
+    // Get vectors of triangles
+    auto const dx1 = box_geo.get_mi_vector(pos1, pos3);
+    auto const dx2 = box_geo.get_mi_vector(pos2, pos3);
+    auto const dx3 = box_geo.get_mi_vector(pos4, pos3);
+
+    // Get normals on triangle; pointing outwards by definition of indices
+    // sequence
+    auto const n1l = vector_product(dx1, dx2);
+    auto const n2l = -vector_product(dx1, dx3);
+
+    auto const n1 = n1l / n1l.norm();
+    auto const n2 = n2l / n2l.norm();
+
+    // calculate theta0 by taking the acos of the scalar n1*n2
+    auto const sc = std::min(1., n1 * n2);
+
+    theta0 = std::acos(sc);
+
+    auto const desc = dx1 * vector_product(n1, n2);
+    theta0 = (desc < 0.) ? 2. * std::numbers::pi - theta0 : theta0;
+  }
+  is_initialized = true;
+}

@@ -1,0 +1,43 @@
+/*
+ * Copyright (C) 2019-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <walberla_bridge/utils/ResourceManager.hpp>
+
+#include <memory>
+
+namespace walberla {
+
+/** @brief Initialize waLBerla's MPI manager and environment. */
+void mpi_init();
+
+/** @brief Release waLBerla's MPI manager and environment. */
+void mpi_deinit();
+
+/** @brief Re-initialize waLBerla's MPI Cartesian communicator. */
+void mpi_reinit(int const *cart_topol);
+
+/** @brief Get a lock on waLBerla's global resources for VTK. */
+std::unique_ptr<ResourceManager> get_vtk_dependent_resources();
+
+/** @brief Get an observer on waLBerla's MPI Cartesian communicator status. */
+ResourceObserver get_mpi_cart_comm_observer();
+
+} // namespace walberla

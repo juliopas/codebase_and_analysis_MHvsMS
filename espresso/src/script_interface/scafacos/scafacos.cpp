@@ -1,0 +1,199 @@
+/*
+ * Copyright (C) 2022-2026 The ESPResSo project
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "config/config.hpp"
+
+#if defined(ESPRESSO_SCAFACOS) or defined(ESPRESSO_SCAFACOS_DIPOLES)
+
+#include "script_interface/Variant.hpp"
+#include "script_interface/get_value.hpp"
+
+#include "scafacos.hpp"
+
+#include "core/scafacos/ScafacosContextBase.hpp"
+
+#include <utils/demangle.hpp>
+
+#include <algorithm>
+#include <functional>
+#include <iomanip>
+#include <iterator>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+namespace ScriptInterface {
+namespace Scafacos {
+
+std::vector<std::string> available_methods() {
+  return ScafacosContextBase::available_methods();
+}
+
+struct ConvertToStringVector {
+  using result_type = std::vector<std::string>;
+
+  auto operator()(std::string const &value) const { return result_type{value}; }
+
+  template <typename T> result_type operator()(T const &value) const {
+    if constexpr (std::is_arithmetic_v<T>) {
+      return operator()(to_str(value));
+    }
+    throw std::runtime_error("Cannot convert " + Utils::demangle<T>());
+  }
+
+  auto operator()(result_type const &values) const { return values; }
+
+  template <typename T, std::size_t N>
+  auto operator()(std::span<T, N> const values) const {
+    result_type values_str;
+    for (auto const &v : values) {
+      if constexpr (std::is_same_v<std::remove_cvref_t<T>, Variant>) {
+        values_str.emplace_back(std::visit(*this, v).front());
+      } else {
+        values_str.emplace_back(to_str(v));
+      }
+    }
+    return values_str;
+  }
+
+  template <typename T> auto operator()(std::vector<T> const &values) const {
+    return (*this)(std::span(values.begin(), values.size()));
+  }
+
+  template <typename T, std::size_t N>
+  auto operator()(Utils::Vector<T, N> const &values) const {
+    return (*this)(std::span(values.begin(), N));
+  }
+
+private:
+  template <typename T>
+    requires std::is_arithmetic_v<T>
+  std::string to_str(T const &value) const {
+    std::ostringstream serializer;
+    if constexpr (std::is_floating_point_v<T>) {
+      serializer << std::scientific << std::setprecision(17);
+    }
+    serializer << value;
+    return serializer.str();
+  }
+};
+
+struct GetParameterList {
+  using result_type = std::unordered_map<std::string, Variant>;
+
+  auto operator()(result_type const &obj) const { return obj; }
+
+  template <typename T>
+  auto operator()(std::unordered_map<T, Variant> const &obj) const {
+    // handle the case of the empty dict, which can have any key type
+    return (obj.empty()) ? result_type{} : invalid(obj);
+  }
+
+  template <typename T> auto operator()(T const &obj) const {
+    return invalid(obj);
+  }
+
+private:
+  template <typename T> auto invalid(T const &obj) const {
+    return get_value<result_type>(obj);
+  }
+};
+
+std::string serialize_parameters(Variant const &pack) {
+  auto const parameters = std::visit(GetParameterList(), pack);
+  if (parameters.empty()) {
+    throw std::invalid_argument(
+        "ScaFaCoS methods require at least 1 parameter");
+  }
+  auto const visitor = ConvertToStringVector();
+  std::string method_params = "";
+  for (auto const &[name, values] : parameters) {
+    method_params += "," + name;
+    for (auto const &value : std::visit(visitor, values)) {
+      method_params += "," + value;
+    }
+  }
+  return method_params.substr(1);
+}
+
+template <typename T>
+std::optional<Variant> string_to_number(std::string const &s) {
+  auto deserializer = std::istringstream(s);
+  T result;
+  deserializer >> result;
+  if (deserializer.fail() or not deserializer.eof()) {
+    return {};
+  }
+  return Variant{result};
+}
+
+std::unordered_map<std::string, Variant>
+deserialize_parameters(std::string const &parameters) {
+  /*
+   * ScaFaCoS parameters are serialized to a comma-separated string.
+   * Key-value pairs can be split with a look ahead: when the next
+   * item is a string, it is a parameter name and the current list
+   * of arithmetic values belong to the current parameter name.
+   * The only exception is string-valued parameters; in that case
+   * the current list of arithmetic values is empty.
+   */
+  auto const numbers = std::string("-0123456789");
+  std::unordered_map<std::string, Variant> method_params{};
+  std::vector<std::string> flat_array;
+  std::istringstream buffer;
+  buffer.str(parameters);
+  for (std::string line; std::getline(buffer, line, ',');) {
+    flat_array.emplace_back(line);
+  }
+  for (auto it = flat_array.begin(); it != flat_array.end();) {
+    auto const parameter_name = *it;
+    auto parameter_list = std::vector<Variant>{};
+    for (++it; it != flat_array.end(); ++it) {
+      if ((numbers.find(it->front()) == std::string::npos) and
+          not parameter_list.empty()) {
+        break;
+      }
+      auto result = Variant{*it};
+      if (auto converted = string_to_number<int>(*it)) {
+        result = Variant{*converted};
+      } else if (auto converted = string_to_number<double>(*it)) {
+        result = Variant{*converted};
+      }
+      parameter_list.emplace_back(result);
+    }
+    assert(not parameter_list.empty());
+    if (parameter_list.size() == 1ul) {
+      method_params[parameter_name] = parameter_list.front();
+    } else {
+      method_params[parameter_name] = Variant{std::move(parameter_list)};
+    }
+  }
+  return method_params;
+}
+
+} // namespace Scafacos
+} // namespace ScriptInterface
+
+#endif // ESPRESSO_SCAFACOS or ESPRESSO_SCAFACOS_DIPOLES

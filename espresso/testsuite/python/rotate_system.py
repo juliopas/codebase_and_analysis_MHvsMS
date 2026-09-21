@@ -1,0 +1,88 @@
+#
+# Copyright (C) 2017-2026 The ESPResSo project
+#
+# This file is part of ESPResSo.
+#
+# ESPResSo is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ESPResSo is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+"""
+Testmodule for System.rotate_system()
+
+"""
+import unittest as ut
+import numpy as np
+import espressomd
+import espressomd.propagation
+
+
+class RotateSystemTest(ut.TestCase):
+    system = espressomd.System(box_l=3 * [10.])
+
+    def tearDown(self):
+        self.system.part.clear()
+
+    def test_no_mass(self):
+        system = self.system
+        p0 = system.part.add(pos=[4, 4, 4])
+        p1 = system.part.add(pos=[6, 6, 6])
+
+        pi = np.pi
+        system.rotate_system(phi=0., theta=0., alpha=pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [6, 4, 4])
+        np.testing.assert_allclose(np.copy(p1.pos), [4, 6, 6])
+
+        system.rotate_system(phi=0., theta=0., alpha=-pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [4, 4, 4])
+        np.testing.assert_allclose(np.copy(p1.pos), [6, 6, 6])
+
+        system.rotate_system(phi=pi / 2., theta=0., alpha=pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [6, 4, 4])
+        np.testing.assert_allclose(np.copy(p1.pos), [4, 6, 6])
+
+        system.rotate_system(phi=pi / 2., theta=0., alpha=-pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [4, 4, 4])
+        np.testing.assert_allclose(np.copy(p1.pos), [6, 6, 6])
+
+        system.rotate_system(phi=pi / 2., theta=pi / 2., alpha=pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [4, 4, 6])
+        np.testing.assert_allclose(np.copy(p1.pos), [6, 6, 4])
+
+        system.rotate_system(phi=pi / 2., theta=pi / 2., alpha=-pi / 2.)
+
+        np.testing.assert_allclose(np.copy(p0.pos), [4, 4, 4])
+        np.testing.assert_allclose(np.copy(p1.pos), [6, 6, 6])
+
+        # Check that virtual sites do not influence the center of mass
+        # calculation
+        if espressomd.has_features("VIRTUAL_SITES_RELATIVE"):
+            Propagation = espressomd.propagation.Propagation
+            vs_dist = 0.01
+            p2 = system.part.add(pos=p1.pos)
+            p2.vs_relative = (p1.id, vs_dist, (1., 0., 0., 0.))
+            p2.propagation = (Propagation.TRANS_VS_RELATIVE |
+                              Propagation.ROT_VS_RELATIVE)
+            system.rotate_system(phi=pi / 2., theta=pi / 2., alpha=-pi / 2.)
+            np.testing.assert_allclose(np.copy(p0.pos), [6, 4, 4])
+            np.testing.assert_allclose(np.copy(p1.pos), [4, 6, 6])
+            np.testing.assert_allclose(np.copy(p2.pos), [4, 6, 6 + vs_dist])
+
+
+if __name__ == "__main__":
+    ut.main()

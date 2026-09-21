@@ -1,0 +1,327 @@
+/*
+ * Copyright (C) 2010-2026 The ESPResSo project
+ * Copyright (C) 2002,2003,2004,2005,2006,2007,2008,2009,2010
+ *   Max-Planck-Institute for Polymer Research, Theory Group
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/** \file
+ *  Common functions for dipolar and charge P3M.
+ *
+ *  We use here a P3M (Particle-Particle Particle-Mesh) method based
+ *  on the Ewald summation. Details of the used method can be found in
+ *  @cite hockney88a and @cite deserno98a @cite deserno98b. The file p3m
+ *  contains only the Particle-Mesh part.
+ *
+ *  Further reading: @cite ewald21a, @cite hockney88a, @cite deserno98a,
+ *  @cite deserno98b, @cite deserno00e, @cite deserno00b, @cite cerda08d
+ *
+ */
+
+#pragma once
+
+#include <config/config.hpp>
+
+#include <utils/Vector.hpp>
+#include <utils/index.hpp>
+
+#include <algorithm>
+#include <array>
+#include <vector>
+
+/** This value indicates metallic boundary conditions. */
+inline auto constexpr P3M_EPSILON_METALLIC = 0.0;
+
+#if defined(ESPRESSO_P3M) or defined(ESPRESSO_DP3M)
+
+#include "LocalBox.hpp"
+
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <stdexcept>
+
+/** @brief P3M kernel architecture. */
+enum class Arch { CPU, CUDA };
+
+/** @brief Structure to hold P3M parameters and some dependent variables. */
+struct P3MParameters {
+  /** tuning or production? */
+  bool tuning;
+  /** Ewald splitting parameter (0<alpha<1), rescaled to
+   *  @p alpha_L = @p alpha * @p box_l. */
+  double alpha_L;
+  /** cutoff radius for real space electrostatics (>0), rescaled to
+   *  @p r_cut_iL = @p r_cut * @p box_l_i. */
+  double r_cut_iL;
+  /** number of mesh points per coordinate direction (>0), in real space. */
+  Utils::Vector3i mesh;
+  /** offset of the first mesh point (lower left corner) from the
+   *  coordinate origin ([0,1[). */
+  Utils::Vector3d mesh_off;
+  /** charge assignment order ([0,7]). */
+  int cao;
+  /** accuracy of the actual parameter set. */
+  double accuracy;
+
+  /** epsilon of the "surrounding dielectric". */
+  double epsilon;
+  /** cutoff for charge assignment. */
+  Utils::Vector3d cao_cut;
+  /** mesh constant. */
+  Utils::Vector3d a;
+  /** inverse mesh constant. */
+  Utils::Vector3d ai;
+  /** unscaled @ref P3MParameters::alpha_L "alpha_L" for use with fast
+   *  inline functions only */
+  double alpha;
+  /** unscaled @ref P3MParameters::r_cut_iL "r_cut_iL" for use with fast
+   *  inline functions only */
+  double r_cut;
+  /** number of points unto which a single charge is interpolated, i.e.
+   *  @ref P3MParameters::cao "cao" cubed */
+  int cao3;
+
+  P3MParameters(bool tuning, double epsilon, double r_cut,
+                Utils::Vector3i const &mesh, Utils::Vector3d const &mesh_off,
+                int cao, double alpha, double accuracy)
+      : tuning{tuning}, alpha_L{0.}, r_cut_iL{0.}, mesh{mesh},
+        mesh_off{mesh_off}, cao{cao}, accuracy{accuracy}, epsilon{epsilon},
+        cao_cut{}, a{}, ai{}, alpha{alpha}, r_cut{r_cut}, cao3{-1} {
+
+    auto constexpr value_to_tune = -1.;
+
+    if (epsilon < 0.) {
+      throw std::domain_error("Parameter 'epsilon' must be >= 0");
+    }
+
+    if (accuracy <= 0.) {
+      throw std::domain_error("Parameter 'accuracy' must be > 0");
+    }
+
+    if (r_cut <= 0.) {
+      if (tuning and r_cut == value_to_tune) {
+        this->r_cut = 0.;
+      } else {
+        throw std::domain_error("Parameter 'r_cut' must be > 0");
+      }
+    }
+
+    if (alpha <= 0.) {
+      if (tuning and alpha == value_to_tune) {
+        this->alpha = 0.;
+      } else {
+        throw std::domain_error("Parameter 'alpha' must be > 0");
+      }
+    }
+
+    if (not(mesh >= Utils::Vector3i::broadcast(1) or
+            ((mesh[0] >= 1) and (mesh == Utils::Vector3i{{mesh[0], -1, -1}})) or
+            (tuning and mesh == Utils::Vector3i::broadcast(-1)))) {
+      throw std::domain_error("Parameter 'mesh' must be > 0");
+    }
+
+    if (not(mesh_off >= Utils::Vector3d::broadcast(0.) and
+            mesh_off <= Utils::Vector3d::broadcast(1.))) {
+      if (mesh_off == Utils::Vector3d::broadcast(-1.)) {
+        this->mesh_off = Utils::Vector3d::broadcast(0.5);
+      } else {
+        throw std::domain_error("Parameter 'mesh_off' must be >= 0 and <= 1");
+      }
+    }
+
+    if ((cao < 1 or cao > 7) and (not tuning or cao != -1)) {
+      throw std::domain_error("Parameter 'cao' must be >= 1 and <= 7");
+    }
+
+    if (not tuning and (Utils::Vector3i::broadcast(cao) > mesh)) {
+      throw std::domain_error("Parameter 'cao' cannot be larger than 'mesh'");
+    }
+  }
+
+  /**
+   * @brief Recalculate quantities derived from the mesh and box length:
+   * @ref P3MParameters::a "a",
+   * @ref P3MParameters::ai "ai" and
+   * @ref P3MParameters::cao_cut "cao_cut".
+   */
+  void recalc_a_ai_cao_cut(Utils::Vector3d const &box_l) {
+    ai = Utils::hadamard_division(mesh, box_l);
+    a = Utils::hadamard_division(Utils::Vector3d::broadcast(1.), ai);
+    cao_cut = (static_cast<double>(cao) / 2.) * a;
+  }
+
+  /**
+   * @brief Convert spatial position to grid position.
+   * To get the grid index, round the result to the nearest integer.
+   */
+  auto calc_grid_pos(Utils::Vector3d const &pos) const {
+    return Utils::hadamard_product(pos, ai) - mesh_off;
+  }
+};
+
+/** @brief Properties of the local mesh. */
+struct P3MLocalMesh {
+  /** dimension (size) of local mesh including halo layers. */
+  Utils::Vector3i dim;
+  Utils::Vector3i dim_no_halo;
+  /** number of local mesh points including halo layers. */
+  std::size_t size;
+  /** index of lower left corner of the
+      local mesh in the global mesh. */
+  Utils::Vector3i ld_ind;
+  /** position of the first local mesh point. */
+  Utils::Vector3d ld_pos;
+  Utils::Vector3i ld_no_halo;
+  Utils::Vector3i ur_no_halo;
+  /** dimension of mesh inside node domain. */
+  Utils::Vector3i inner;
+  /** inner left down grid point */
+  Utils::Vector3i in_ld;
+  /** inner up right grid point + (1,1,1) */
+  Utils::Vector3i in_ur;
+  /** number of margin mesh points. */
+  int margin[6]; // !! legacy
+  Utils::Vector3i n_halo_ld;
+  Utils::Vector3i n_halo_ur;
+  /** number of margin mesh points from neighbour nodes */
+  int r_margin[6];
+  /** offset between mesh lines of the last dimension */
+  int q_2_off;
+  /** offset between mesh lines of the two last dimensions */
+  int q_21_off;
+
+  /**
+   * @brief Recalculate quantities derived from the mesh and box length:
+   * @ref P3MLocalMesh::ld_pos "ld_pos" (position of the left down mesh).
+   */
+  void recalc_ld_pos(P3MParameters const &params) {
+    // spatial position of left down mesh point
+    for (auto i = 0u; i < 3u; i++) {
+      ld_pos[i] = (ld_ind[i] + params.mesh_off[i]) * params.a[i];
+    }
+  }
+
+  /**
+   * @brief Calculate properties of the local FFT mesh
+   * for the charge assignment process.
+   */
+  void calc_local_ca_mesh(P3MParameters const &params,
+                          LocalBox const &local_geo, double skin,
+                          double space_layer);
+};
+
+/** @brief Local mesh FFT buffers. */
+template <typename FloatType> struct P3MFFTMesh {
+  /** @brief real-space scalar mesh for charge assignment and FFT. */
+  std::span<FloatType> rs_scalar;
+  /** @brief real-space scalar charge density. */
+  std::span<FloatType> rs_charge_density;
+
+  /** @brief real-space vector meshes for the electric or dipolar field. */
+  std::array<std::span<FloatType>, 3> rs_fields;
+
+  /** @brief Indices of the lower left corner of the local mesh grid. */
+  Utils::Vector3i start;
+  /** @brief Indices of the upper right corner of the local mesh grid. */
+  Utils::Vector3i stop;
+  /** @brief Extents of the local mesh grid. */
+  Utils::Vector3i size;
+
+  /** @brief number of permutations in k_space */
+  int ks_pnum = 0;
+};
+
+struct TuningParameters {
+  int timings;
+  std::pair<std::optional<int>, std::optional<int>> limits;
+  bool verbose;
+};
+
+/**
+ * @brief Adapt an influence function grid for real-to-complex FFTs.
+ * @param[in]     global_size   size of the global mesh grid
+ * @param[in]     local_size    size of the local mesh grid
+ * @param[in]     local_origin  offset of the local mesh grid
+ * @param[in,out] g_function    influence function grid to modify in-place
+ * @tparam        r2c_dir       direction of the reduced dimension
+ */
+template <unsigned int r2c_dir>
+void influence_function_r2c(auto &g_function, auto const &global_size,
+                            auto const &local_size, auto const &local_origin) {
+  auto const cutoff_right = global_size[r2c_dir] / 2 - local_origin[r2c_dir];
+  std::remove_cvref_t<decltype(g_function)> g_function_r2c;
+  g_function_r2c.reserve(g_function.size() / 2ul);
+  auto local_index = Utils::Vector3i::broadcast(0);
+  auto &short_dim = local_index[r2c_dir];
+  auto &nx = local_index[0u];
+  auto &ny = local_index[1u];
+  auto &nz = local_index[2u];
+  std::size_t index = 0u;
+  for (nx = 0; nx < local_size[0u]; ++nx) {
+    for (ny = 0; ny < local_size[1u]; ++ny) {
+      for (nz = 0; nz < local_size[2u]; ++nz) {
+        if (short_dim <= cutoff_right) {
+          g_function_r2c.emplace_back(g_function[index]);
+        }
+        ++index;
+      }
+    }
+  }
+  std::swap(g_function, g_function_r2c);
+}
+
+#endif // defined(ESPRESSO_P3M) or defined(ESPRESSO_DP3M)
+
+/** @brief Calculate indices that shift @ref P3MParameters::mesh by `mesh/2`.
+ *  For each mesh size @f$ n @f$ in @c mesh_size, create a sequence of integer
+ *  values @f$ \left( 0, \ldots, \lfloor n/2 \rfloor, -\lfloor n/2 \rfloor,
+ *  \ldots, -1\right) @f$ if @c zero_out_midpoint is false, otherwise
+ *  @f$ \left( 0, \ldots, \lfloor n/2 - 1 \rfloor, 0, -\lfloor n/2 \rfloor,
+ *  \ldots, -1\right) @f$.
+ */
+std::array<std::vector<int>, 3> inline calc_p3m_mesh_shift(
+    Utils::Vector3i const &mesh_size, bool zero_out_midpoint = false) {
+  std::array<std::vector<int>, 3> ret{};
+
+  for (auto i = 0u; i < 3u; ++i) {
+    ret[i] = std::vector<int>(static_cast<std::size_t>(mesh_size[i]));
+
+    for (int j = 1; j <= mesh_size[i] / 2; j++) {
+      ret[i][j] = j;
+      ret[i][mesh_size[i] - j] = -j;
+    }
+    if (zero_out_midpoint)
+      ret[i][mesh_size[i] / 2] = 0;
+  }
+
+  return ret;
+}
+
+template <Utils::MemoryOrder RSpaceOrder = Utils::MemoryOrder::ROW_MAJOR,
+          Utils::MemoryOrder KSpaceOrder = Utils::MemoryOrder::ROW_MAJOR,
+          bool UseR2C = false, unsigned int R2CDir = 2u>
+struct P3MFFTConfig {
+  /** @brief Data layout of the input real-space 3D matrix. */
+  static auto constexpr r_space_order = RSpaceOrder;
+  /** @brief Data layout of the output k-space 3D matrix. */
+  static auto constexpr k_space_order = KSpaceOrder;
+  /** @brief Use real-to-complex implementation. */
+  static auto constexpr use_r2c = UseR2C;
+  /** @brief Direction of the reduced dimension (if @c use_r2c is true). */
+  static auto constexpr r2c_dir = R2CDir;
+};

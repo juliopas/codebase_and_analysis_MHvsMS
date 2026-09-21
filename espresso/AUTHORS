@@ -1,0 +1,168 @@
+ESPResSo is maintained and developed mainly at the Institute for
+Computational Physics at Stuttgart University, Germany, in the group
+of Prof. Dr. Christian Holm (http://www.icp.uni-stuttgart.de).
+
+Until 2010, ESPResSo was maintained and developed mainly at the
+Max-Planck-Institute for Polymer Research in Mainz, Germany in the
+group of Prof. Dr. Kurt Kremer.
+
+The following people have contributed to ESPResSo:
+
+Core developers
+---------------
+Rudolf Weeber
+Jean-Noël Grad
+Alexander Reinauer
+Hideki Kobayashi
+Ingo Tischler
+
+Former Core Developers
+----------------------
+Kai Szuttor
+Florian Weik
+Georg Rempfer
+Stefan Kesselheim
+Bernward Mann (deceased 2006)
+Christoph Junghans
+Hans-Jörg Limbach
+Torsten Stühn
+Axel Arnold
+Olaf Lenz
+
+Contributors
+------------
+Adolfo Poma
+adr1ja
+Alexander Schlaich
+Alexander Weyman
+Andrea Tagliabue
+Andrei Bazarenko
+Arjit Maitra
+Ashreya Jayaram
+Ben Reynwar (formerly: Reynolds)
+Bogdan Tanygin
+Cameron Stewart
+Carl Georg Biermann
+Charlotte Borge Hunskår
+Christian Haege
+Christoph Lohrmann
+Christoph Schneider
+David Beyer
+David Schwörer
+David Sean
+Deniz Mostarac
+Dmitro Galperin
+Dmytro Antypov
+Dominic Röhm
+Elena Minina
+Eli Schwartz
+Evangelos Ribeiro Tzaras
+Fabian Zills
+Florian Fahrenberger (formerly: Rühle)
+Florian Häußermann
+Francesca Lugli
+Frank Mühlbach
+Gizem Inci
+Gregoria Illya
+Hamid Zaheri
+Hao Lu
+Henri Menke
+Igor Pasichnyk
+Ira Cooke
+Iva Jancigova
+Ivan Cimrak
+Iveta Jancigova
+Jakub Krajniak
+Jan Finkbeiner
+Joan Josep Cerdà
+Johannes Rotheneder
+Jonas Landsgesell
+Jonas Scheunemann
+Jon Halverson
+Joost de Graaf
+Josh Berryman
+Julian Hoßbach
+Julius Herb
+Kai Grass
+Kai Kratzer
+Karen Johnston
+Kartik Jain
+Keerthi Radhakrishnan
+Kevin Kleinbeck
+Konrad Breitsprecher
+Le Qiao
+Loris Leon Burth
+Lukas Dorschel
+Lukas Fischer
+Marcello Sega
+Mariano E. Brito
+Markus Gusenbauer
+Martin Kaiser
+Matej Praprotnik
+Mehmet Sayar
+Mehmet Süzen
+Michael Kuron
+Michael Lahnert
+Milena Smiljanic
+Mingyang Hu
+Miru Lee
+Moritz Schumacher
+Muhammad Anwar
+Nicolai Roth
+Nikhil-4595
+Niklas Müller
+Nils Binz
+Nishchay Suri
+Oleg V. Rud
+Owen A. Hickey-Moriarty
+Pablo Miguel Blanco Andrés
+Pascal Hebbeker
+Patrick Diggins
+Patrick Kreissl
+Paul Hohenberger
+Pedro Ojeda
+Pedro Sanchez
+Peter Košovan
+Philipp Stärk
+Pierre de Buyl
+Rebecca Stephan
+Riccardo Frenner
+Robert Kaufmann
+Robin Bardakcioglu
+Sam Foley
+Sandeep Tyagi
+Sascha Erhardt
+Sathish K. Sukumaran
+Sebastian Bindgen
+Sela Samin
+Shervin Raafatnia
+Simon Gravelle
+Simon Koppenhöfer
+Simon Poblete
+Simon Schöll
+Somesh Kurahatti
+Stefan Medina
+Stefan Reimann-Zitz
+Steffen Hirschmann
+Stephan Gekle
+Thilo Paul
+Thomas Spura
+Tilak Waelde
+Tim Meiler
+Timo Schürg
+Tobias Rau
+Tobias Richter
+Tobias Steinle
+Tristan Bereau
+Ulf Schiller
+Vagelis Harmandaris
+Vincent Ballenegger
+Vladimir Lobaskin
+Yashas Tejaskumar Gandhi
+Zunjing Wang
+
+Special thanks
+--------------
+Special thanks to Henrik Skov Midtiby for providing a GPL version of
+todonotes.sty.
+

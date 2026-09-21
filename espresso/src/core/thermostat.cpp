@@ -1,0 +1,109 @@
+/*
+ * Copyright (C) 2010-2026 The ESPResSo project
+ * Copyright (C) 2002,2003,2004,2005,2006,2007,2008,2009,2010
+ *   Max-Planck-Institute for Polymer Research, Theory Group
+ *
+ * This file is part of ESPResSo.
+ *
+ * ESPResSo is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ESPResSo is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+/** \file
+ *  Implementation of \ref thermostat.hpp.
+ */
+
+#include <config/config.hpp>
+
+#include "bonded_interactions/bonded_interaction_data.hpp"
+#include "bonded_interactions/thermalized_bond.hpp"
+#include "communication.hpp"
+#include "errorhandling.hpp"
+#include "nonbonded_interactions/nonbonded_interaction_data.hpp"
+#include "npt.hpp"
+#include "system/System.hpp"
+#include "thermostat.hpp"
+
+#include <ranges>
+#include <variant>
+
+void Thermostat::Thermostat::recalc_prefactors(double time_step) {
+  if (thermalized_bond) {
+    thermalized_bond->recalc_prefactors(time_step, *(get_system().bonded_ias));
+  }
+  if (langevin) {
+    langevin->recalc_prefactors(kT, time_step);
+  }
+  if (brownian) {
+    brownian->recalc_prefactors(kT);
+  }
+#ifdef ESPRESSO_DPD
+  if (dpd) {
+    get_system().nonbonded_ias->dpd_init(kT, time_step);
+  }
+#endif
+#ifdef ESPRESSO_NPT
+  if (npt_iso) {
+    npt_iso->recalc_prefactors(kT, get_system().nptiso->piston,
+                               get_system().nptiso->mass_list, time_step);
+  }
+#endif
+}
+
+void Thermostat::Thermostat::philox_counter_increment() {
+  if (thermo_switch & THERMO_LANGEVIN) {
+    langevin->rng_increment();
+  }
+  if (thermo_switch & THERMO_BROWNIAN) {
+    brownian->rng_increment();
+  }
+#ifdef ESPRESSO_NPT
+  if (thermo_switch & THERMO_NPT_ISO) {
+    npt_iso->rng_increment();
+  }
+#endif
+#ifdef ESPRESSO_DPD
+  if (thermo_switch & THERMO_DPD) {
+    dpd->rng_increment();
+  }
+#endif
+#ifdef ESPRESSO_STOKESIAN_DYNAMICS
+  if (thermo_switch & THERMO_SD) {
+    stokesian->rng_increment();
+  }
+#endif
+  if (thermo_switch & THERMO_BOND) {
+    thermalized_bond->rng_increment();
+  }
+}
+
+void Thermostat::Thermostat::lb_coupling_deactivate() {
+  if (lb) {
+    if (get_system().lb.is_solver_set() and ::comm_cart.rank() == 0 and
+        lb->gamma > 0.) {
+      runtimeWarningMsg()
+          << "Recalculating forces, so the LB coupling forces are not "
+             "included in the particle force the first time step. This "
+             "only matters if it happens frequently during sampling.";
+    }
+    lb->couple_to_md = false;
+  }
+}
+
+void ThermalizedBondThermostat::recalc_prefactors(
+    double time_step, BondedInteractionsMap &bonded_ias) {
+  for (auto &handle : std::views::elements<1>(bonded_ias)) {
+    if (auto *bond = std::get_if<ThermalizedBond>(handle.get())) {
+      bond->recalc_prefactors(time_step);
+    }
+  }
+}

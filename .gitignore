@@ -1,0 +1,24 @@
+# Dataset -- too large for GitHub, distributed separately. See README.md.
+DATA/
+DATA.zip
+*.zip
+
+# Local Python environment
+venv/
+.venv/
+
+# ESPResSo build tree (~480 MB, machine-specific, contains nested git repos)
+espresso/build/
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Zenodo working notes (not part of the public repository)
+zenodo-submission.md

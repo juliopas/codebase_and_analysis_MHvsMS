@@ -1,0 +1,39 @@
+# pynal
+
+pynal is a lightweight Python library for analyzing data from molecular dynamics simulations of magneto active elastomers using pressomancy + ESPResSo.
+
+## Features
+
+- Just in time compiled functions for the calulation of dipolar, Zeeman, and harmonic bonds energy (+ especial variants)
+- Estipulate a surface of a slab geometry usgin ITIM method (droping spheres)
+- Transform virtual bonds between MD particles into particles, for vizualization and analysis purpose - for example, to get a more representative surface and volume of an elastomer made of magnetic particles and springs.
+- Height maps and peak analysis of free surface
+- ...
+
+## Installation
+
+If you are reading this, you can simply install via pip. First go to the directory where the REAME file (this file) is. Then:
+
+```bash
+pip install .
+```
+
+If you want to make changes to any module, consider intaling with the `e` flag, to keep changes up to date automatically:
+
+```bash
+pip install -e .
+```
+
+---
+
+## **4. Usage Examples**
+
+```python
+raise NotImplementedError
+```
+
+---
+
+- **Requirements / Dependencies** – if you want to highlight key packages.  
+- **Contributing** – Email me. You have my email
+- **License** – I cannot control what you use your computer for. Just don't steal the code and sell it somewhere as being yours. Please. Pretty please.
